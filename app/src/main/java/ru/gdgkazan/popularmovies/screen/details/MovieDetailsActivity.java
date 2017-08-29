@@ -5,28 +5,45 @@ import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
 import android.support.design.widget.CollapsingToolbarLayout;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.ActivityOptionsCompat;
 import android.support.v4.content.ContextCompat;
 import android.support.v4.view.ViewCompat;
 import android.support.v7.app.AppCompatActivity;
+import android.support.v7.widget.LinearLayoutManager;
+import android.support.v7.widget.RecyclerView;
 import android.support.v7.widget.Toolbar;
 import android.transition.Slide;
+import android.util.Log;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.ImageView;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.util.List;
 
 import butterknife.BindView;
 import butterknife.ButterKnife;
+import io.realm.Realm;
+import io.realm.RealmResults;
 import ru.gdgkazan.popularmovies.R;
+import ru.gdgkazan.popularmovies.model.content.DataHolder;
 import ru.gdgkazan.popularmovies.model.content.Movie;
 import ru.gdgkazan.popularmovies.model.content.Review;
 import ru.gdgkazan.popularmovies.model.content.Video;
+import ru.gdgkazan.popularmovies.model.response.ReviewsResponse;
+import ru.gdgkazan.popularmovies.model.response.VideosResponse;
+import ru.gdgkazan.popularmovies.network.ApiFactory;
+import ru.gdgkazan.popularmovies.screen.loading.LoadingDialog;
+import ru.gdgkazan.popularmovies.screen.loading.LoadingView;
 import ru.gdgkazan.popularmovies.utils.Images;
+import rx.Observable;
+import rx.Subscription;
+import rx.android.schedulers.AndroidSchedulers;
+import rx.schedulers.Schedulers;
 
 public class MovieDetailsActivity extends AppCompatActivity {
 
@@ -53,6 +70,17 @@ public class MovieDetailsActivity extends AppCompatActivity {
     @BindView(R.id.rating)
     TextView mRatingTextView;
 
+    @BindView(R.id.rvReviews)
+    RecyclerView rvReviews;
+
+    @BindView(R.id.rvVideos)
+    RecyclerView rvVideos;
+
+    @Nullable
+    private Subscription moviesSubscription;
+    private ReviewsAdapter reviewAdapter = new ReviewsAdapter();
+    private VideosAdapter videoAdapter = new VideosAdapter();
+
     public static void navigate(@NonNull AppCompatActivity activity, @NonNull View transitionImage,
                                 @NonNull Movie movie) {
         Intent intent = new Intent(activity, MovieDetailsActivity.class);
@@ -78,8 +106,58 @@ public class MovieDetailsActivity extends AppCompatActivity {
             getSupportActionBar().setDisplayHomeAsUpEnabled(true);
         }
 
+        rvReviews.setLayoutManager(new LinearLayoutManager(this));
+        rvReviews.setAdapter(reviewAdapter);
+        rvVideos.setLayoutManager(new LinearLayoutManager(this));
+        rvVideos.setAdapter(videoAdapter);
+        LoadingView loadingView = LoadingDialog.view(getSupportFragmentManager());
+
         Movie movie = getIntent().getParcelableExtra(EXTRA_MOVIE);
         showMovie(movie);
+
+
+        Observable<List<Review>> reviewObservable = ApiFactory.getMoviesService()
+                .movieReviews(movie.getId())
+                .map(ReviewsResponse::getReviews)
+                .flatMap(reviews -> {
+                    Realm.getDefaultInstance().executeTransaction(realm -> {
+                        realm.delete(Review.class);
+                        realm.insert(reviews);
+                    });
+                    return Observable.just(reviews);
+                })
+                .onErrorResumeNext(throwable -> {
+                    Realm realm = Realm.getDefaultInstance();
+                    RealmResults<Review> results = realm.where(Review.class).findAll();
+                    return Observable.just(realm.copyFromRealm(results));
+                });
+
+        Observable<List<Video>> videoObservable = ApiFactory.getMoviesService()
+                .movieVideos(movie.getId())
+                .map(VideosResponse::getVideos)
+                .flatMap(videos -> {
+                    Realm.getDefaultInstance().executeTransaction(realm -> {
+                        realm.delete(Video.class);
+                        realm.insert(videos);
+                    });
+                    return Observable.just(videos);
+                })
+                .onErrorResumeNext(throwable -> {
+                    Realm realm = Realm.getDefaultInstance();
+                    RealmResults<Video> results = realm.where(Video.class).findAll();
+                    return Observable.just(realm.copyFromRealm(results));
+                });
+
+        moviesSubscription = Observable.combineLatest(reviewObservable, videoObservable, (reviews, videos) -> new DataHolder(reviews, videos))
+                .doOnSubscribe(loadingView::showLoadingIndicator)
+                .doAfterTerminate(loadingView::hideLoadingIndicator)
+                .cache()
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(dataHolder -> {
+                    showReviews(dataHolder.getReviewList());
+                    showTrailers(dataHolder.getVideoList());
+                }, throwable -> showError());
 
         /**
          * TODO : task
@@ -98,6 +176,13 @@ public class MovieDetailsActivity extends AppCompatActivity {
          *
          * 5) Handle lifecycle changes any way you like
          */
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        if (moviesSubscription != null)
+            moviesSubscription.unsubscribe();
     }
 
     @Override
@@ -140,10 +225,18 @@ public class MovieDetailsActivity extends AppCompatActivity {
 
     private void showTrailers(@NonNull List<Video> videos) {
         // TODO : show trailers
+        videoAdapter.setData(videos);
+        Log.i("Details", videos.toString());
     }
 
     private void showReviews(@NonNull List<Review> reviews) {
         // TODO : show reviews
+        reviewAdapter.setData(reviews);
+        Log.i("Details", reviews.toString());
+    }
+
+    private void showError() {
+        Toast.makeText(this, "Can`t load data", Toast.LENGTH_SHORT).show();
     }
 
 }
