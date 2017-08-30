@@ -9,14 +9,15 @@ import android.support.annotation.Nullable;
 import android.support.design.widget.CollapsingToolbarLayout;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.ActivityOptionsCompat;
+import android.support.v4.app.LoaderManager;
 import android.support.v4.content.ContextCompat;
+import android.support.v4.content.Loader;
 import android.support.v4.view.ViewCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
 import android.support.v7.widget.Toolbar;
 import android.transition.Slide;
-import android.util.Log;
 import android.view.MenuItem;
 import android.view.View;
 import android.widget.ImageView;
@@ -27,23 +28,15 @@ import java.util.List;
 
 import butterknife.BindView;
 import butterknife.ButterKnife;
-import io.realm.Realm;
-import io.realm.RealmResults;
 import ru.gdgkazan.popularmovies.R;
 import ru.gdgkazan.popularmovies.model.content.DataHolder;
 import ru.gdgkazan.popularmovies.model.content.Movie;
 import ru.gdgkazan.popularmovies.model.content.Review;
 import ru.gdgkazan.popularmovies.model.content.Video;
-import ru.gdgkazan.popularmovies.model.response.ReviewsResponse;
-import ru.gdgkazan.popularmovies.model.response.VideosResponse;
-import ru.gdgkazan.popularmovies.network.ApiFactory;
 import ru.gdgkazan.popularmovies.screen.loading.LoadingDialog;
 import ru.gdgkazan.popularmovies.screen.loading.LoadingView;
 import ru.gdgkazan.popularmovies.utils.Images;
-import rx.Observable;
 import rx.Subscription;
-import rx.android.schedulers.AndroidSchedulers;
-import rx.schedulers.Schedulers;
 
 public class MovieDetailsActivity extends AppCompatActivity {
 
@@ -51,6 +44,7 @@ public class MovieDetailsActivity extends AppCompatActivity {
 
     public static final String IMAGE = "image";
     public static final String EXTRA_MOVIE = "extraMovie";
+    private static final int LOADER_ID = 1;
 
     @BindView(R.id.toolbar)
     Toolbar mToolbar;
@@ -76,10 +70,10 @@ public class MovieDetailsActivity extends AppCompatActivity {
     @BindView(R.id.rvVideos)
     RecyclerView rvVideos;
 
-    @Nullable
-    private Subscription moviesSubscription;
+    private LoadingView loadingView;
     private ReviewsAdapter reviewAdapter = new ReviewsAdapter();
     private VideosAdapter videoAdapter = new VideosAdapter();
+    private Movie movie;
 
     public static void navigate(@NonNull AppCompatActivity activity, @NonNull View transitionImage,
                                 @NonNull Movie movie) {
@@ -110,13 +104,17 @@ public class MovieDetailsActivity extends AppCompatActivity {
         rvReviews.setAdapter(reviewAdapter);
         rvVideos.setLayoutManager(new LinearLayoutManager(this));
         rvVideos.setAdapter(videoAdapter);
-        LoadingView loadingView = LoadingDialog.view(getSupportFragmentManager());
+        loadingView = LoadingDialog.view(getSupportFragmentManager());
 
-        Movie movie = getIntent().getParcelableExtra(EXTRA_MOVIE);
+         movie = getIntent().getParcelableExtra(EXTRA_MOVIE);
         showMovie(movie);
+        loadingView.showLoadingIndicator();
+
+        LoaderManager.LoaderCallbacks<DataHolder> callbacks = new DetailsCallback();
+        getSupportLoaderManager().initLoader(LOADER_ID, Bundle.EMPTY, callbacks);
 
 
-        Observable<List<Review>> reviewObservable = ApiFactory.getMoviesService()
+        /*Observable<List<Review>> reviewObservable = ApiFactory.getMoviesService()
                 .movieReviews(movie.getId())
                 .map(ReviewsResponse::getReviews)
                 .flatMap(reviews -> {
@@ -158,7 +156,7 @@ public class MovieDetailsActivity extends AppCompatActivity {
                     showReviews(dataHolder.getReviewList());
                     showTrailers(dataHolder.getVideoList());
                 }, throwable -> showError());
-
+*/
         /**
          * TODO : task
          *
@@ -181,8 +179,6 @@ public class MovieDetailsActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
-        if (moviesSubscription != null)
-            moviesSubscription.unsubscribe();
     }
 
     @Override
@@ -224,19 +220,39 @@ public class MovieDetailsActivity extends AppCompatActivity {
     }
 
     private void showTrailers(@NonNull List<Video> videos) {
-        // TODO : show trailers
         videoAdapter.setData(videos);
-        Log.i("Details", videos.toString());
     }
 
     private void showReviews(@NonNull List<Review> reviews) {
-        // TODO : show reviews
         reviewAdapter.setData(reviews);
-        Log.i("Details", reviews.toString());
     }
 
     private void showError() {
         Toast.makeText(this, "Can`t load data", Toast.LENGTH_SHORT).show();
     }
 
+    private class DetailsCallback implements LoaderManager.LoaderCallbacks<DataHolder> {
+
+
+        @Override
+        public Loader<DataHolder> onCreateLoader(int id, Bundle args) {
+            return new DetailsLoader(MovieDetailsActivity.this,movie);
+        }
+
+        @Override
+        public void onLoadFinished(Loader<DataHolder> loader, DataHolder data) {
+            loadingView.hideLoadingIndicator();
+            if(!data.hasError()) {
+                showTrailers(data.getVideoList());
+                showReviews(data.getReviewList());
+            }else{
+                showError();
+            }
+        }
+
+        @Override
+        public void onLoaderReset(Loader<DataHolder> loader) {
+
+        }
+    }
 }
